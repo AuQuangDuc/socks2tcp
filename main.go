@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -18,8 +19,10 @@ import (
 type Config struct {
 	ListenAddr  string
 	TargetSocks string
-	Username    string
-	Password    string
+	User        string // local proxy auth user
+	Pass        string // local proxy auth pass
+	UpUser      string // upstream auth user
+	UpPass      string // upstream auth pass
 }
 
 // RemoteResolver forces remote DNS resolution by not resolving hostnames locally
@@ -85,8 +88,11 @@ func main() {
 
 	flag.StringVar(&config.ListenAddr, "l", "", "Listen address for SOCKS5 proxy (e.g., 127.0.0.1:1080)")
 	flag.StringVar(&config.TargetSocks, "r", "", "Target SOCKS5 proxy address (e.g., 127.0.0.1:1081)")
-	flag.StringVar(&config.Username, "user", "", "SOCKS5 username for authentication")
-	flag.StringVar(&config.Password, "pass", "", "SOCKS5 password for authentication")
+	flag.StringVar(&config.User, "user", "", "Local SOCKS5 username for authentication")
+	flag.StringVar(&config.Pass, "pass", "", "Local SOCKS5 password for authentication")
+	// New flags for upstream auth
+	flag.StringVar(&config.UpUser, "ruser", "", "Upstream SOCKS5 username for authentication (optional)")
+	flag.StringVar(&config.UpPass, "rpass", "", "Upstream SOCKS5 password for authentication (optional)")
 	flag.Parse()
 
 	if config.ListenAddr == "" {
@@ -110,22 +116,33 @@ func main() {
 
 	log.Printf("Starting authenticated SOCKS5 proxy on %s, forwarding to SOCKS5 proxy %s", config.ListenAddr, config.TargetSocks)
 
-	// Setup authentication if provided
+	// Setup authentication if provided (for local proxy)
 	var opts []socks5.Option
 
-	if config.Username != "" && config.Password != "" {
-		log.Printf("Authentication enabled for user: %s", config.Username)
+	if config.User != "" && config.Pass != "" {
+		log.Printf("Local authentication enabled for user: %s", config.User)
 		// Create credential store
 		creds := socks5.StaticCredentials{
-			config.Username: config.Password,
+			config.User: config.Pass,
 		}
 		opts = append(opts, socks5.WithCredential(creds))
 	} else {
-		log.Printf("No authentication required")
+		log.Printf("No local authentication required")
 	}
 
-	// Create dialer to target SOCKS5 proxy (unauthenticated)
-	targetDialer, err := proxy.SOCKS5("tcp", config.TargetSocks, nil, proxy.Direct)
+	// Create dialer to target SOCKS5 proxy (allow optional auth to upstream)
+	var upAuth *proxy.Auth
+	if config.UpUser != "" {
+		upAuth = &proxy.Auth{
+			User:     config.UpUser,
+			Password: config.UpPass,
+		}
+		log.Printf("Upstream authentication will be used for user: %s", config.UpUser)
+	} else {
+		log.Printf("No upstream authentication provided; connecting to upstream without auth")
+	}
+
+	targetDialer, err := proxy.SOCKS5("tcp", config.TargetSocks, upAuth, proxy.Direct)
 	if err != nil {
 		log.Fatalf("Failed to create SOCKS5 dialer to target proxy: %v", err)
 	}
@@ -136,8 +153,8 @@ func main() {
 	// Add custom dialer that forwards through target SOCKS5 proxy with bidirectional traffic logging
 	opts = append(opts, socks5.WithDial(func(ctx context.Context, network, addr string) (net.Conn, error) {
 		log.Printf("Establishing connection to %s through SOCKS5 proxy %s", addr, config.TargetSocks)
-
-		// Connect to target SOCKS5 proxy
+		
+		// Connect to target SOCKS5 proxy (this dialer already handles upstream auth if provided)
 		targetConn, err := targetDialer.Dial(network, addr)
 		if err != nil {
 			log.Printf("Failed to connect to %s through SOCKS5 proxy: %v", addr, err)
