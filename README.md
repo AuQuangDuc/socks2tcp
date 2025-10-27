@@ -28,6 +28,8 @@ go build -o socks2tcp main.go
 - `-r string`: Target TCP address to forward to (e.g., 127.0.0.1:8080) **[Required]**
 - `-user string`: SOCKS5 username for authentication **[Optional]**
 - `-pass string`: SOCKS5 password for authentication **[Optional]**
+- `-ruser string`: Upstream SOCKS5 username for authentication
+- `-rpass string`: Upstream SOCKS5 password for authentication
 
 ### Examples
 
